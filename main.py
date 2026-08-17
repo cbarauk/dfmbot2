@@ -6,8 +6,20 @@ import aiosqlite
 
 # --- Environment Variables ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-ENFORCER_ROLE_ID = os.getenv("ENFORCER_ROLE_ID")
+ENFORCER_ROLE_ID = os.getenv("ENFORCER_ROLE_ID", "").strip()
 DB_PATH = "/data/data.db"  # Railway volume mount path
+
+
+def get_enforcer_mention() -> str:
+    if not ENFORCER_ROLE_ID:
+        return "@unknown-role"
+
+    try:
+        int(ENFORCER_ROLE_ID)
+    except ValueError:
+        return "@unknown-role"
+
+    return f"<@&{ENFORCER_ROLE_ID}>"
 
 # --- Intents Setup ---
 # We need message_content and members intents for the bot to read messages and ping roles properly
@@ -43,11 +55,20 @@ class HeistView(discord.ui.View):
 
     async def handle_heist(self, interaction: discord.Interaction, heist_name: str):
         if not ENFORCER_ROLE_ID:
-            await interaction.response.send_message("Configuration error: Enforcer role ID is missing.", ephemeral=True)
+            await interaction.response.send_message(
+                "Configuration error: the Enforcer role ID is missing. Please set ENFORCER_ROLE_ID to a valid Discord role ID.",
+                ephemeral=False
+            )
+            return
+
+        if ENFORCER_ROLE_ID != str(int(ENFORCER_ROLE_ID)):
+            await interaction.response.send_message(
+                "Configuration error: ENFORCER_ROLE_ID must be a valid numeric Discord role ID.",
+                ephemeral=False
+            )
             return
 
         async with aiosqlite.connect(DB_PATH) as db:
-            # Fetch current count
             cursor = await db.execute(
                 "SELECT count FROM heist_stats WHERE user_id = ? AND heist_type = ?",
                 (interaction.user.id, heist_name)
@@ -58,7 +79,6 @@ class HeistView(discord.ui.View):
             new_count = current_count + 1
 
             if new_count >= 5:
-                # Reset to 0 and trigger prestige alert
                 await db.execute(
                     "INSERT INTO heist_stats (user_id, heist_type, count) VALUES (?, ?, 0) "
                     "ON CONFLICT(user_id, heist_type) DO UPDATE SET count = 0",
@@ -66,14 +86,12 @@ class HeistView(discord.ui.View):
                 )
                 await db.commit()
 
-                # Public message pinging the enforcer role
-                enforcer_mention = f"<@&{ENFORCER_ROLE_ID}>"
+                enforcer_mention = get_enforcer_mention()
                 user_mention = interaction.user.mention
                 await interaction.response.send_message(
                     f"{enforcer_mention}, {user_mention} has hit 5/5 on {heist_name} and needs their prestige!"
                 )
             else:
-                # Update count and send ephemeral confirmation
                 await db.execute(
                     "INSERT INTO heist_stats (user_id, heist_type, count) VALUES (?, ?, ?) "
                     "ON CONFLICT(user_id, heist_type) DO UPDATE SET count = ?",
@@ -82,7 +100,7 @@ class HeistView(discord.ui.View):
                 await db.commit()
 
                 await interaction.response.send_message(
-                    f"You are now {new_count}/5 on {heist_name}.", ephemeral=True
+                    f"{interaction.user.mention} is now {new_count}/5 on {heist_name}."
                 )
 
     @discord.ui.button(label="Fleeca", style=discord.ButtonStyle.primary, custom_id="heist_btn_fleeca")
