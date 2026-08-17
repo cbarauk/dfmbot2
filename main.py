@@ -47,11 +47,46 @@ async def init_db():
         """)
         await db.commit()
 
+async def get_heist_totals():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT heist_type, SUM(count) FROM heist_stats GROUP BY heist_type"
+        )
+        rows = await cursor.fetchall()
+
+    totals = {row[0]: int(row[1] or 0) for row in rows}
+    return {
+        "Fleeca": totals.get("Fleeca", 0),
+        "Store": totals.get("Store", 0),
+        "ATM": totals.get("ATM", 0),
+    }
+
+
+def build_heist_tracker_embed(totals=None):
+    totals = totals or {"Fleeca": 0, "Store": 0, "ATM": 0}
+    embed = discord.Embed(
+        title="DFM Heist Progress",
+        description="Click a button below to update the team heist tracker.",
+        color=discord.Color.dark_gold()
+    )
+    embed.add_field(name="Fleeca", value=f"{totals['Fleeca']}/5", inline=True)
+    embed.add_field(name="Store", value=f"{totals['Store']}/5", inline=True)
+    embed.add_field(name="ATM", value=f"{totals['ATM']}/5", inline=True)
+    return embed
+
+
 # --- Persistent UI View ---
 class HeistView(discord.ui.View):
     def __init__(self):
         # timeout=None makes the view persistent across restarts
         super().__init__(timeout=None)
+
+    async def refresh_tracker_message(self, interaction: discord.Interaction):
+        if interaction.message is None:
+            return
+
+        totals = await get_heist_totals()
+        await interaction.message.edit(embed=build_heist_tracker_embed(totals), view=self)
 
     async def handle_heist(self, interaction: discord.Interaction, heist_name: str):
         if not ENFORCER_ROLE_ID:
@@ -61,12 +96,16 @@ class HeistView(discord.ui.View):
             )
             return
 
-        if ENFORCER_ROLE_ID != str(int(ENFORCER_ROLE_ID)):
+        try:
+            int(ENFORCER_ROLE_ID)
+        except ValueError:
             await interaction.response.send_message(
                 "Configuration error: ENFORCER_ROLE_ID must be a valid numeric Discord role ID.",
                 ephemeral=False
             )
             return
+
+        await interaction.response.defer()
 
         async with aiosqlite.connect(DB_PATH) as db:
             cursor = await db.execute(
@@ -88,7 +127,12 @@ class HeistView(discord.ui.View):
 
                 enforcer_mention = get_enforcer_mention()
                 user_mention = interaction.user.mention
-                await interaction.response.send_message(
+                if interaction.message is not None:
+                    await interaction.message.edit(
+                        embed=build_heist_tracker_embed(await get_heist_totals()),
+                        view=self
+                    )
+                await interaction.followup.send(
                     f"{enforcer_mention}, {user_mention} has hit 5/5 on {heist_name} and needs their prestige!"
                 )
             else:
@@ -99,9 +143,8 @@ class HeistView(discord.ui.View):
                 )
                 await db.commit()
 
-                await interaction.response.send_message(
-                    f"{interaction.user.mention} is now {new_count}/5 on {heist_name}."
-                )
+                if interaction.message is not None:
+                    await self.refresh_tracker_message(interaction)
 
     @discord.ui.button(label="Fleeca", style=discord.ButtonStyle.primary, custom_id="heist_btn_fleeca")
     async def fleeca_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -143,13 +186,7 @@ async def on_ready():
                 break
         else:
             # If no existing menu was found, post a new one
-            embed = discord.Embed(
-                title="Heist Progression System",
-                description="Click a button below to log your heist progress!\n\n"
-                            "**Fleeca** | **Store** | **ATM**\n"
-                            "Hitting 5/5 will alert an Enforcer for prestige.",
-                color=discord.Color.dark_gold()
-            )
+            embed = build_heist_tracker_embed(await get_heist_totals())
             await channel.send(embed=embed, view=HeistView())
             print(f"Successfully posted heist menu to channel: {channel.name}")
 
@@ -160,13 +197,7 @@ async def on_ready():
 @bot.tree.command(name="setup_heists", description="Post the persistent heist progression buttons.")
 @app_commands.default_permissions(administrator=True)
 async def setup_heists(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="Heist Progression System",
-        description="Click a button below to log your heist progress!\n\n"
-                    "**Fleeca** | **Store** | **ATM**\n"
-                    "Hitting 5/5 will alert an Enforcer for prestige.",
-        color=discord.Color.dark_gold()
-    )
+    embed = build_heist_tracker_embed(await get_heist_totals())
     # Pass the persistent view to the message
     await interaction.channel.send(embed=embed, view=HeistView())
     await interaction.response.send_message("Heist buttons posted successfully!", ephemeral=True)
