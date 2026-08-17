@@ -188,6 +188,7 @@ async def on_ready():
             # If no existing menu was found, post a new one
             embed = build_heist_tracker_embed(await get_heist_totals())
             await channel.send(embed=embed, view=HeistView())
+            await channel.send("Leaderboard: \n")
             print(f"Successfully posted heist menu to channel: {channel.name}")
 
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
@@ -200,7 +201,125 @@ async def setup_heists(interaction: discord.Interaction):
     embed = build_heist_tracker_embed(await get_heist_totals())
     # Pass the persistent view to the message
     await interaction.channel.send(embed=embed, view=HeistView())
+    await interaction.channel.send("Leaderboard: \n")
     await interaction.response.send_message("Heist buttons posted successfully!", ephemeral=True)
+
+
+@bot.tree.command(name="resetdfm", description="Reset the heist tracker values.")
+@app_commands.default_permissions(administrator=True)
+async def resetdfm(interaction: discord.Interaction):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM heist_stats")
+        await db.commit()
+
+    await interaction.response.send_message("DFM heist tracker has been reset.", ephemeral=True)
+
+    async for message in interaction.channel.history(limit=20):
+        if message.author == bot.user and message.embeds:
+            if "DFM Heist Progress" in message.embeds[0].title:
+                await message.edit(embed=build_heist_tracker_embed({"Fleeca": 0, "Store": 0, "ATM": 0}), view=HeistView())
+                break
+
+
+@bot.tree.command(name="resetleaderboard", description="Reset the leaderboard message.")
+@app_commands.default_permissions(administrator=True)
+async def resetleaderboard(interaction: discord.Interaction):
+    async for message in interaction.channel.history(limit=20):
+        if message.author == bot.user and message.content.startswith("Leaderboard:"):
+            await message.edit(content="Leaderboard: \n")
+            break
+
+    await interaction.response.send_message("Leaderboard reset.", ephemeral=True)
+
+
+@bot.tree.command(name="adddfm", description="Add a heist count to a specific user.")
+@app_commands.default_permissions(administrator=True)
+async def adddfm(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    heist: str,
+    amount: int = 1,
+):
+    normalized_heist = heist.title()
+    if normalized_heist not in {"Fleeca", "Store", "ATM"}:
+        await interaction.response.send_message("Heist must be Fleeca, Store, or ATM.", ephemeral=True)
+        return
+
+    if amount < 1:
+        await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT count FROM heist_stats WHERE user_id = ? AND heist_type = ?",
+            (user.id, normalized_heist)
+        )
+        row = await cursor.fetchone()
+        current_count = row[0] if row else 0
+
+        new_count = current_count + amount
+        await db.execute(
+            "INSERT INTO heist_stats (user_id, heist_type, count) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, heist_type) DO UPDATE SET count = ?",
+            (user.id, normalized_heist, new_count, new_count)
+        )
+        await db.commit()
+
+    await interaction.response.send_message(
+        f"Added {amount} to {user.mention} for {normalized_heist}. They now have {new_count}/5.",
+        ephemeral=True
+    )
+
+    async for message in interaction.channel.history(limit=20):
+        if message.author == bot.user and message.embeds:
+            if "DFM Heist Progress" in message.embeds[0].title:
+                await message.edit(embed=build_heist_tracker_embed(await get_heist_totals()), view=HeistView())
+                break
+
+
+@bot.tree.command(name="removedfm", description="Remove a heist count from a specific user.")
+@app_commands.default_permissions(administrator=True)
+async def removedfm(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    heist: str,
+    amount: int = 1,
+):
+    normalized_heist = heist.title()
+    if normalized_heist not in {"Fleeca", "Store", "ATM"}:
+        await interaction.response.send_message("Heist must be Fleeca, Store, or ATM.", ephemeral=True)
+        return
+
+    if amount < 1:
+        await interaction.response.send_message("Amount must be at least 1.", ephemeral=True)
+        return
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT count FROM heist_stats WHERE user_id = ? AND heist_type = ?",
+            (user.id, normalized_heist)
+        )
+        row = await cursor.fetchone()
+        current_count = row[0] if row else 0
+
+        new_count = max(0, current_count - amount)
+        await db.execute(
+            "INSERT INTO heist_stats (user_id, heist_type, count) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, heist_type) DO UPDATE SET count = ?",
+            (user.id, normalized_heist, new_count, new_count)
+        )
+        await db.commit()
+
+    await interaction.response.send_message(
+        f"Removed {amount} from {user.mention} for {normalized_heist}. They now have {new_count}/5.",
+        ephemeral=True
+    )
+
+    async for message in interaction.channel.history(limit=20):
+        if message.author == bot.user and message.embeds:
+            if "DFM Heist Progress" in message.embeds[0].title:
+                await message.edit(embed=build_heist_tracker_embed(await get_heist_totals()), view=HeistView())
+                break
 
 
 @bot.tree.command(name="my_stats", description="View your current heist progression.")
