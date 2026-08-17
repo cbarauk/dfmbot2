@@ -62,6 +62,42 @@ async def get_heist_totals():
     }
 
 
+async def get_leaderboard_entries(limit=10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT user_id, SUM(count) AS total FROM heist_stats GROUP BY user_id ORDER BY total DESC LIMIT ?",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+
+    return rows
+
+
+def build_leaderboard_text(entries):
+    if not entries:
+        return "Leaderboard:\nNo scores yet."
+
+    lines = ["Leaderboard:"]
+    for index, (user_id, total) in enumerate(entries, start=1):
+        lines.append(f"{index}. <@{user_id}> — {total}/5")
+    return "\n".join(lines)
+
+
+async def refresh_leaderboard(channel):
+    entries = await get_leaderboard_entries()
+    leaderboard_message = build_leaderboard_text(entries)
+
+    if channel is None:
+        return
+
+    async for message in channel.history(limit=30):
+        if message.author == bot.user and message.content.startswith("Leaderboard:"):
+            await message.edit(content=leaderboard_message)
+            return
+
+    await channel.send(leaderboard_message)
+
+
 def build_heist_tracker_embed(totals=None):
     totals = totals or {"Fleeca": 0, "Store": 0, "ATM": 0}
     embed = discord.Embed(
@@ -87,6 +123,8 @@ class HeistView(discord.ui.View):
 
         totals = await get_heist_totals()
         await interaction.message.edit(embed=build_heist_tracker_embed(totals), view=self)
+        if interaction.channel is not None:
+            await refresh_leaderboard(interaction.channel)
 
     async def handle_heist(self, interaction: discord.Interaction, heist_name: str):
         if not ENFORCER_ROLE_ID:
@@ -132,6 +170,8 @@ class HeistView(discord.ui.View):
                         embed=build_heist_tracker_embed(await get_heist_totals()),
                         view=self
                     )
+                    if interaction.channel is not None:
+                        await refresh_leaderboard(interaction.channel)
                 await interaction.followup.send(
                     f"{enforcer_mention}, {user_mention} has hit 5/5 on {heist_name} and needs their prestige!"
                 )
@@ -188,7 +228,7 @@ async def on_ready():
             # If no existing menu was found, post a new one
             embed = build_heist_tracker_embed(await get_heist_totals())
             await channel.send(embed=embed, view=HeistView())
-            await channel.send("Leaderboard: \n")
+            await refresh_leaderboard(channel)
             print(f"Successfully posted heist menu to channel: {channel.name}")
 
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
@@ -201,7 +241,7 @@ async def setup_heists(interaction: discord.Interaction):
     embed = build_heist_tracker_embed(await get_heist_totals())
     # Pass the persistent view to the message
     await interaction.channel.send(embed=embed, view=HeistView())
-    await interaction.channel.send("Leaderboard: \n")
+    await refresh_leaderboard(interaction.channel)
     await interaction.response.send_message("Heist buttons posted successfully!", ephemeral=True)
 
 
@@ -220,13 +260,15 @@ async def resetdfm(interaction: discord.Interaction):
                 await message.edit(embed=build_heist_tracker_embed({"Fleeca": 0, "Store": 0, "ATM": 0}), view=HeistView())
                 break
 
+    await refresh_leaderboard(interaction.channel)
+
 
 @bot.tree.command(name="resetleaderboard", description="Reset the leaderboard message.")
 @app_commands.default_permissions(administrator=True)
 async def resetleaderboard(interaction: discord.Interaction):
     async for message in interaction.channel.history(limit=20):
         if message.author == bot.user and message.content.startswith("Leaderboard:"):
-            await message.edit(content="Leaderboard: \n")
+            await message.edit(content="Leaderboard:\nNo scores yet.")
             break
 
     await interaction.response.send_message("Leaderboard reset.", ephemeral=True)
@@ -276,6 +318,8 @@ async def adddfm(
                 await message.edit(embed=build_heist_tracker_embed(await get_heist_totals()), view=HeistView())
                 break
 
+    await refresh_leaderboard(interaction.channel)
+
 
 @bot.tree.command(name="removedfm", description="Remove a heist count from a specific user.")
 @app_commands.default_permissions(administrator=True)
@@ -320,6 +364,8 @@ async def removedfm(
             if "DFM Heist Progress" in message.embeds[0].title:
                 await message.edit(embed=build_heist_tracker_embed(await get_heist_totals()), view=HeistView())
                 break
+
+    await refresh_leaderboard(interaction.channel)
 
 
 @bot.tree.command(name="my_stats", description="View your current heist progression.")
