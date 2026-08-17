@@ -10,6 +10,7 @@ ENFORCER_ROLE_ID = os.getenv("ENFORCER_ROLE_ID")
 DB_PATH = "/data/data.db"  # Railway volume mount path
 
 # --- Intents Setup ---
+# We need message_content and members intents for the bot to read messages and ping roles properly
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -110,6 +111,30 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
     
+    # --- AUTO POST TO SPECIFIC CHANNEL ---
+    TARGET_CHANNEL_ID = 1539033757200158871
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    
+    if channel is None:
+        print(f"ERROR: Could not find channel with ID {TARGET_CHANNEL_ID}. Make sure the bot is in the server.")
+    else:
+        # Check if a heist menu is already in the channel to prevent spam on restarts
+        async for message in channel.history(limit=50):
+            if message.author == bot.user and message.components:
+                print("Heist menu already exists in the channel. Skipping auto-post.")
+                break
+        else:
+            # If no existing menu was found, post a new one
+            embed = discord.Embed(
+                title="Heist Progression System",
+                description="Click a button below to log your heist progress!\n\n"
+                            "**Fleeca** | **Store** | **ATM**\n"
+                            "Hitting 5/5 will alert an Enforcer for prestige.",
+                color=discord.Color.dark_gold()
+            )
+            await channel.send(embed=embed, view=HeistView())
+            print(f"Successfully posted heist menu to channel: {channel.name}")
+
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 
