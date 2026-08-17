@@ -65,21 +65,37 @@ async def get_heist_totals():
 async def get_leaderboard_entries(limit=10):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            "SELECT user_id, SUM(count) AS total FROM heist_stats GROUP BY user_id ORDER BY total DESC LIMIT ?",
-            (limit,)
+            "SELECT user_id, heist_type, count FROM heist_stats ORDER BY user_id ASC"
         )
         rows = await cursor.fetchall()
 
-    return rows
+    grouped = {}
+    for user_id, heist_type, count in rows:
+        grouped.setdefault(user_id, {"Fleeca": 0, "Store": 0, "ATM": 0})
+        if heist_type in {"Fleeca", "Store", "ATM"}:
+            grouped[user_id][heist_type] = int(count)
+
+    leaderboard = []
+    for user_id, stats in grouped.items():
+        total = stats["Fleeca"] + stats["Store"] + stats["ATM"]
+        leaderboard.append((user_id, total, stats))
+
+    leaderboard.sort(key=lambda item: item[1], reverse=True)
+    return leaderboard[:limit]
 
 
 def build_leaderboard_text(entries):
     if not entries:
         return "Leaderboard:\nNo scores yet."
 
+    numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
     lines = ["Leaderboard:"]
-    for index, (user_id, total) in enumerate(entries, start=1):
-        lines.append(f"{index}. <@{user_id}> — {total}/5")
+    for index, (user_id, total, stats) in enumerate(entries, start=1):
+        fleeca = stats.get("Fleeca", 0)
+        store = stats.get("Store", 0)
+        atm = stats.get("ATM", 0)
+        medal = numbers[index - 1] if index - 1 < len(numbers) else f"{index}."
+        lines.append(f"{medal} <@{user_id}> - {total} total • 🏦 {fleeca} • 🏪 {store} • 💳 {atm}")
     return "\n".join(lines)
 
 
@@ -186,15 +202,15 @@ class HeistView(discord.ui.View):
                 if interaction.message is not None:
                     await self.refresh_tracker_message(interaction)
 
-    @discord.ui.button(label="Fleeca", style=discord.ButtonStyle.primary, custom_id="heist_btn_fleeca")
+    @discord.ui.button(label="🏦 Fleeca", style=discord.ButtonStyle.primary, custom_id="heist_btn_fleeca")
     async def fleeca_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_heist(interaction, "Fleeca")
 
-    @discord.ui.button(label="Store", style=discord.ButtonStyle.success, custom_id="heist_btn_store")
+    @discord.ui.button(label="🏪 Store", style=discord.ButtonStyle.success, custom_id="heist_btn_store")
     async def store_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_heist(interaction, "Store")
 
-    @discord.ui.button(label="ATM", style=discord.ButtonStyle.secondary, custom_id="heist_btn_atm")
+    @discord.ui.button(label="💳 ATM", style=discord.ButtonStyle.secondary, custom_id="heist_btn_atm")
     async def atm_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_heist(interaction, "ATM")
 
